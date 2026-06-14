@@ -1,0 +1,15 @@
+{
+  "name": "sumup-xero-reconcile",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240815.0",
+    "@types/node": "^25.9.2",
+    "typescript": "^5.4.0",
+    "wrangler": "^4.99.0"
+  }
+}
