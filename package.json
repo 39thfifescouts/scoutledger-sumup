@@ -3,13 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "sync": "tsx scripts/sync.ts",
+    "sync:dry": "tsx scripts/sync.ts --dry-run"
+  },
+  "dependencies": {
+    "libsodium-wrappers": "^0.8.4"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240815.0",
-    "@types/node": "^25.9.2",
-    "typescript": "^5.4.0",
-    "wrangler": "^4.99.0"
+    "@types/libsodium-wrappers": "^0.7.14",
+    "@types/node": "^22",
+    "tsx": "^4",
+    "typescript": "^5"
   }
 }

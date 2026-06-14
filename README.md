@@ -1,118 +1,57 @@
 # sumup-xero-reconcile
 
-Cloudflare Worker that listens for SumUp payment webhooks and creates matching bank transactions in Xero. Each successful card payment becomes a `RECEIVE` transaction in your Xero bank account, with the gross amount and SumUp fee recorded as separate line items.
-
-This project follows the same pattern as [scoutledger-subscriptions](../scoutledger-subscriptions), which does the same for GoCardless direct debit payouts.
+GitHub Actions workflow that polls SumUp daily for completed payouts and creates matching bank transactions in Xero. Each settlement deposit gets a `RECEIVE` transaction with one line item per card payment plus a fees line, so Xero can auto-reconcile it against the bank statement.
 
 ---
 
 ## How it works
 
-1. A customer makes a card payment via SumUp.
-2. SumUp fires a `PAYMENT` webhook to `https://sumup-webhook.scoutledger.dev`.
-3. The Worker verifies the HMAC-SHA256 signature, then calls `processTransaction`.
-4. If a Xero transaction with the same `transaction_code` reference already exists it is skipped (idempotent).
-5. Otherwise a Xero `RECEIVE` bank transaction is created with:
-   - One line item for the gross payment amount, coded to `XERO_ACCOUNT_CARD_SALES`.
-   - One negative line item for the SumUp fee, coded to `XERO_ACCOUNT_FEES`.
-6. Tracking categories (`Fund Type = Unrestricted`, `Group Activities = <event>`) are applied and auto-created in Xero if missing.
-7. A success or error notification email is sent via Resend.
+1. The workflow runs daily at 7am UTC (and can be triggered manually).
+2. It fetches SumUp payouts executed in the past 8 days.
+3. For each payout not already in Xero, it fetches the individual card transactions for that payout date.
+4. It creates a Xero `RECEIVE` bank transaction:
+   - One line item per card payment → account **224**, gross amount
+   - One negative aggregate fee line → account **404**
+   - Net amount = payout settlement amount (matches the bank deposit exactly)
+5. Tracking is applied to each payment line: `Fund Type = Unrestricted`, `Group Activities = <product name entered in SumUp>`. Tracking options are created in Xero automatically if they don't exist yet.
+6. A success or error email is sent via Resend.
 
-SumUp always receives an HTTP 200 response — it retries on non-2xx, so errors are reported by email rather than by returning a failure status.
-
----
-
-## Categorisation
-
-Payments are categorised by inspecting the product name / description entered at point of sale in the SumUp app.
-
-| Description pattern | Xero account | Group Activities |
-|---------------------|-------------|-----------------|
-| Contains "camp" or "camps & events" | `XERO_ACCOUNT_FEES` | Camps & Events |
-| Everything else | `XERO_ACCOUNT_CARD_SALES` | _(none)_ |
-
-To add more categories, edit the `categorise` function in [`src/reconcile.ts`](src/reconcile.ts).
+Deduplication is by payout ID stored as the Xero `Reference` field — re-runs are safe.
 
 ---
 
-## Project structure
+## GitHub Secrets
 
-```
-src/
-  config.ts      — Env interface (all environment variables in one place)
-  sumup.ts       — SumUp API client and webhook signature verification
-  xero.ts        — Xero OAuth2 token management and bank transaction API
-  reconcile.ts   — Maps a SumUp payment to Xero line items
-  worker.ts      — Cloudflare Worker entry point
-wrangler.toml    — Worker config, KV binding, custom domain
-.env.example     — Template for local environment variables
-```
+Set these in **Settings → Secrets and variables → Actions → Secrets**:
 
----
+| Secret | Description |
+|--------|-------------|
+| `SUMUP_API_KEY` | SumUp personal access token ([developer.sumup.com](https://developer.sumup.com)) |
+| `XERO_CLIENT_ID` | Xero app client ID |
+| `XERO_CLIENT_SECRET` | Xero app client secret |
+| `XERO_TENANT_ID` | Xero organisation ID |
+| `XERO_REFRESH_TOKEN` | Initial Xero refresh token (rotated automatically after each run) |
+| `XERO_BANK_ACCOUNT_ID` | UUID of the Xero bank account SumUp settles into |
+| `NOTIFY_EMAIL` | Address to receive success/error notifications |
+| `RESEND_API_KEY` | Resend API key (optional — omit to skip emails) |
 
-## Setup
+## Repository variables
 
-### 1. Xero app
+Set these in **Settings → Secrets and variables → Actions → Variables** (not secrets):
 
-1. Go to [developer.xero.com](https://developer.xero.com) and create a new app.
-2. Set the redirect URI to `http://localhost:8080/callback` (used once during initial auth).
-3. Note down **Client ID** and **Client Secret**.
-4. Obtain an initial refresh token by running the OAuth flow once (see the equivalent script in [scoutledger-subscriptions](../scoutledger-subscriptions/src/backfill.ts) for reference, or use Xero's API Explorer).
-
-### 2. SumUp app
-
-1. Log in to [developer.sumup.com](https://developer.sumup.com).
-2. Create an application and generate a **Personal Access Token** (or use OAuth2 if preferred).
-3. Register a webhook pointing to `https://sumup-webhook.scoutledger.dev` with event type `PAYMENT`.
-4. Note down the **Webhook Secret** generated by SumUp.
-
-### 3. Cloudflare KV namespace
-
-This Worker shares the `XERO_TOKENS` KV namespace with [scoutledger-subscriptions](../scoutledger-subscriptions) — the same namespace ID is already set in `wrangler.toml`. Both Workers store the Xero refresh token under the key `xero_refresh_token` and keep it current as Xero rotates it on every use.
-
-No new KV namespace is needed. If you ever need to reseed the token (e.g. after it expires):
-
-```bash
-echo -n "<your_xero_refresh_token>" | npx wrangler kv key put --namespace-id=e44c037b2c8d498ea1a78c37b3cda113 xero_refresh_token --stdin
-```
-
-### 4. Secrets
-
-Set each secret with Wrangler — never store them in `wrangler.toml`:
-
-```bash
-npx wrangler secret put SUMUP_API_KEY
-npx wrangler secret put SUMUP_WEBHOOK_SECRET
-npx wrangler secret put XERO_CLIENT_ID
-npx wrangler secret put XERO_CLIENT_SECRET
-npx wrangler secret put XERO_TENANT_ID
-npx wrangler secret put XERO_BANK_ACCOUNT_ID
-npx wrangler secret put NOTIFY_EMAIL
-npx wrangler secret put RESEND_API_KEY
-```
-
-### 5. Wrangler vars
-
-Review the non-secret values in `wrangler.toml` and update them to match your Xero chart of accounts:
-
-```toml
-[vars]
-XERO_ACCOUNT_CARD_SALES = "200"   # income account for card payments
-XERO_ACCOUNT_FEES = "404"         # expense account for SumUp fees
-XERO_TRACKING_FUND_TYPE = "Fund Type"
-XERO_TRACKING_GROUP_ACTIVITIES = "Group Activities"
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `XERO_TRACKING_FUND_TYPE` | `Fund Type` | Xero tracking category name — must match exactly |
+| `XERO_TRACKING_GROUP_ACTIVITIES` | `Group Activities` | Xero tracking category name — must match exactly |
+| `LOOKBACK_DAYS` | `8` | Days back to scan for payouts on each run |
 
 ---
 
-## Deployment
+## Xero refresh token rotation
 
-```bash
-npm install
-npm run deploy
-```
+Xero rotates the refresh token on every use. The workflow has `permissions: secrets: write`, so after each successful token refresh it writes the new token back to the `XERO_REFRESH_TOKEN` secret automatically. No manual intervention needed.
 
-The Worker deploys to `sumup-webhook.scoutledger.dev` (configured as a Cloudflare custom domain in `wrangler.toml`).
+If you're using a Xero Custom Connection (which uses `client_credentials` instead of OAuth), no refresh token is needed at all and this is a no-op.
 
 ---
 
@@ -122,20 +61,16 @@ The Worker deploys to `sumup-webhook.scoutledger.dev` (configured as a Cloudflar
 cp .env.example .env
 # fill in .env
 
-npm run dev   # starts wrangler dev on http://localhost:8787
+npm install
+npm run sync:dry    # fetches payouts and logs — no Xero writes
+npm run sync        # live run
 ```
-
-Use [ngrok](https://ngrok.com) or [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/) to expose your local port to the internet, then point SumUp's webhook at the tunnel URL for testing.
 
 ---
 
-## Monitoring
+## Manual trigger
 
-```bash
-npx wrangler tail   # stream live logs from the deployed Worker
-```
-
-Success and error notifications are also sent by email (via Resend) to `NOTIFY_EMAIL`.
+Go to **Actions → SumUp → Xero daily sync → Run workflow**. You can enable the `dry_run` toggle to preview without writing to Xero, and optionally override `lookback_days`.
 
 ---
 
@@ -143,7 +78,8 @@ Success and error notifications are also sent by email (via Resend) to `NOTIFY_E
 
 | Symptom | Likely cause |
 |---------|-------------|
-| `Invalid webhook signature` in logs | `SUMUP_WEBHOOK_SECRET` doesn't match what SumUp is using — check the secret in the SumUp developer portal |
-| `Xero token refresh failed 400` | Refresh token has expired or been invalidated — re-run the OAuth flow and re-seed KV |
-| `Xero tracking category "X" not found` | The category name in `wrangler.toml` doesn't exactly match what's in Xero — check capitalisation |
-| Payment processed twice | Shouldn't happen — the Worker checks for an existing Xero transaction by `transaction_code` before creating one |
+| `Xero refresh token failed 400` | Refresh token has expired or been invalidated — re-run the Xero OAuth flow and update the `XERO_REFRESH_TOKEN` secret |
+| `Xero tracking category "X" not found` | Category name in repository variables doesn't exactly match Xero — check capitalisation |
+| `SumUp API error 401` | `SUMUP_API_KEY` is invalid or expired — regenerate in the SumUp developer portal |
+| Net amount mismatch warning in logs | Some transactions on the payout date may have a different status or the SumUp API is paginating — check SumUp portal for the payout details |
+| Transaction created twice | Shouldn't happen — deduplication checks for an `AUTHORISED` Xero transaction with `Reference == payout.id` before creating |

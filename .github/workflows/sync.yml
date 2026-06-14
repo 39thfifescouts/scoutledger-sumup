@@ -1,0 +1,48 @@
+name: SumUp → Xero daily sync
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no data written to Xero)"
+        type: boolean
+        default: false
+      lookback_days:
+        description: "Number of days back to look for payouts"
+        required: false
+        default: "8"
+
+permissions:
+  secrets: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run sync
+        env:
+          SUMUP_API_KEY: ${{ secrets.SUMUP_API_KEY }}
+          XERO_CLIENT_ID: ${{ secrets.XERO_CLIENT_ID }}
+          XERO_CLIENT_SECRET: ${{ secrets.XERO_CLIENT_SECRET }}
+          XERO_TENANT_ID: ${{ secrets.XERO_TENANT_ID }}
+          XERO_REFRESH_TOKEN: ${{ secrets.XERO_REFRESH_TOKEN }}
+          XERO_BANK_ACCOUNT_ID: ${{ secrets.XERO_BANK_ACCOUNT_ID }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          XERO_TRACKING_FUND_TYPE: ${{ vars.XERO_TRACKING_FUND_TYPE || 'Fund Type' }}
+          XERO_TRACKING_GROUP_ACTIVITIES: ${{ vars.XERO_TRACKING_GROUP_ACTIVITIES || 'Group Activities' }}
+          LOOKBACK_DAYS: ${{ inputs.lookback_days || vars.LOOKBACK_DAYS || '8' }}
+        run: npx tsx scripts/sync.ts ${{ inputs.dry_run && '--dry-run' || '' }}
