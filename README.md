@@ -68,24 +68,12 @@ wrangler.toml    — Worker config, KV binding, custom domain
 
 ### 3. Cloudflare KV namespace
 
-The Xero refresh token rotates on every use and must be persisted across Worker invocations.
+This Worker shares the `XERO_TOKENS` KV namespace with [scoutledger-subscriptions](../scoutledger-subscriptions) — the same namespace ID is already set in `wrangler.toml`. Both Workers store the Xero refresh token under the key `xero_refresh_token` and keep it current as Xero rotates it on every use.
+
+No new KV namespace is needed. If you ever need to reseed the token (e.g. after it expires):
 
 ```bash
-npx wrangler kv namespace create XERO_TOKENS
-```
-
-Copy the `id` from the output into `wrangler.toml`:
-
-```toml
-[[kv_namespaces]]
-binding = "XERO_TOKENS"
-id = "<paste id here>"
-```
-
-Seed the initial refresh token:
-
-```bash
-echo -n "<your_xero_refresh_token>" | npx wrangler kv key put --namespace-id=<id> xero_refresh_token --stdin
+echo -n "<your_xero_refresh_token>" | npx wrangler kv key put --namespace-id=e44c037b2c8d498ea1a78c37b3cda113 xero_refresh_token --stdin
 ```
 
 ### 4. Secrets

@@ -13,7 +13,7 @@ invocation_logs = true
 
 [[kv_namespaces]]
 binding = "XERO_TOKENS"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "e44c037b2c8d498ea1a78c37b3cda113"
 
 [vars]
 NOTIFY_FROM = "onboarding@resend.dev"
